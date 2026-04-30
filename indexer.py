@@ -16,13 +16,28 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     stop=stop_after_attempt(5),
     reraise=True
 )
-def call_llm_with_retry(prompt):
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
-    )
-    return response.choices[0].message.content.strip()
+def call_llm_with_retry(prompt, model="llama-3.3-70b-versatile"):
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        if isinstance(e, groq.RateLimitError):
+            raise e  # Let the @retry decorator handle rate limits
+            
+        error_msg = str(e).lower()
+        if "token" in error_msg or "context" in error_msg or "limit" in error_msg:
+            print(f"Token limit error encountered. Falling back to openai/gpt-oss-20b...")
+            fallback_response = client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1
+            )
+            return fallback_response.choices[0].message.content.strip()
+        raise e
 
 def generate_summary(text, level_type):
     if not text.strip():

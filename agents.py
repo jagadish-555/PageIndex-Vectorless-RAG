@@ -43,12 +43,24 @@ class NavigationAgent:
         return [c for c in ranked[:max_nodes] if c]
 
     def ask_llm(self, prompt, model="llama-3.3-70b-versatile"):
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1
-        )
-        return response.choices[0].message.content.strip()
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "token" in error_msg or "context" in error_msg or "limit" in error_msg:
+                print(f"Token limit error encountered. Falling back to openai/gpt-oss-20b...")
+                fallback_response = client.chat.completions.create(
+                    model="openai/gpt-oss-20b",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1
+                )
+                return fallback_response.choices[0].message.content.strip()
+            raise e
 
     def choose_paths(self, query, children):
         options_text = ""
