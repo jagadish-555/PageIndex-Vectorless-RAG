@@ -1,0 +1,92 @@
+import os
+import re
+from groq import Groq
+from dotenv import load_dotenv
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import groq
+
+load_dotenv()
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+
+@retry(
+    retry=retry_if_exception_type(groq.RateLimitError),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(5),
+    reraise=True
+)
+def call_llm_with_retry(prompt):
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1
+    )
+    return response.choices[0].message.content.strip()
+
+def generate_summary(text, level_type):
+    if not text.strip():
+        return "No content to summarize."
+        
+    prompt = f"Provide a brief, concise summary of the following {level_type} text. This summary will be used for navigating a document tree.\n\nText:\n{text}"
+    
+    try:
+        return call_llm_with_retry(prompt)
+    except Exception as e:
+        print(f"API Error during summarization: {e}")
+        return "Summary failed due to API error."
+
+def get_heuristic_summary(text, num_sentences=2):
+    if not text.strip():
+        return "Empty section."
+    sentences = re.split(r'(?<=[.!?]) +', text.strip())
+    return " ".join(sentences[:num_sentences])
+
+def build_tree(structured_data):
+    tree = {"title": "Document", "summary": "", "children": []}
+
+    chapters = []
+    current_chapter = None
+    current_section = None
+
+    for item in structured_data:
+        if item["type"] == "header":
+            if item["level"] == 1:
+                current_chapter = {"title": item["content"], "children": []}
+                chapters.append(current_chapter)
+                current_section = None
+            else:
+                if current_chapter is None:
+                    current_chapter = {"title": "Default Chapter", "children": []}
+                    chapters.append(current_chapter)
+                
+                current_section = {"title": item["content"], "content": []}
+                current_chapter["children"].append(current_section)
+
+        elif item["type"] == "body":
+            if current_chapter is None:
+                current_chapter = {"title": "Default Chapter", "children": []}
+                chapters.append(current_chapter)
+            if current_section is None:
+                current_section = {"title": "Default Section", "content": []}
+                current_chapter["children"].append(current_section)
+                
+            current_section["content"].append(item["content"])
+
+    print("\nStarting High-Speed Summarization Pipeline...")
+    
+    for chapter in chapters:
+        for section in chapter["children"]:
+            text = " ".join(section["content"]) if section["content"] else "Empty section."
+            section["summary"] = get_heuristic_summary(text) 
+
+        print(f"Asking Groq to summarize Chapter: '{chapter.get('title')}'")
+        summaries = " ".join([s.get("summary", "") for s in chapter["children"]])
+        chapter["summary"] = generate_summary(summaries, "chapter")
+
+    print(f"Asking Groq to summarize overall Document")
+    all_chapter_summaries = " ".join([c.get("summary", "") for c in chapters])
+    tree["summary"] = generate_summary(all_chapter_summaries, "document")
+
+    tree["children"] = chapters
+    return tree
