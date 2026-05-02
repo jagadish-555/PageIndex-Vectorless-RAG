@@ -118,4 +118,14 @@ def build_tree(structured_data):
     tree["summary"] = generate_summary(all_chapter_summaries, "document")
 
     tree["children"] = chapters
+    
+    def assign_ids(node, prefix="node"):
+        if "children" in node:
+            for i, child in enumerate(node["children"]):
+                child["node_id"] = f"{prefix}_{i}"
+                assign_ids(child, child["node_id"])
+                
+    tree["node_id"] = "root"
+    assign_ids(tree, "root")
+
     return tree

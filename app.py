@@ -76,9 +76,9 @@ else:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if "trace" in msg:
-                with st.expander("View Agent's Reasoning Path"):
-                    # Joining the multi-node trace for better visibility
-                    st.write(" -> ".join(msg["trace"]))
+                with st.expander("View Agent's Reasoning"):
+                    for step in msg["trace"]:
+                        st.write(f"- {step}")
 
     # Chat Logic
     if prompt := st.chat_input("Ask about the document (e.g., 'Compare the revenue vs risks')"):
@@ -102,7 +102,7 @@ else:
                 
                 # Visualizing the trace steps
                 for step in st.session_state.agent.trace:
-                    st.write(f"Explored: **{step}**")
+                    st.write(f"- {step}")
                     time.sleep(0.1)
                 
                 status.update(label=f"Exploration complete in {round(end_time - start_time, 2)}s", state="complete", expanded=False)

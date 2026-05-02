@@ -15,51 +15,6 @@ class NavigationAgent:
         self.trace = []
         self.gathered_context = [] 
 
-    def _normalize_title(self, title: str) -> str:
-        cleaned = title.strip().strip("\"'`“”‘’")
-        cleaned = re.sub(r"\s+", " ", cleaned)
-        return cleaned.lower()
-
-    def _fuzzy_match_titles(self, chosen_titles, children):
-        title_map = {self._normalize_title(c.get("title", "")): c for c in children}
-        matched_nodes = []
-        for raw in chosen_titles:
-            norm = self._normalize_title(raw)
-            node = title_map.get(norm)
-            if node:
-                matched_nodes.append(node)
-                continue
-
-            for key, candidate in title_map.items():
-                if norm and (norm in key or key in norm):
-                    matched_nodes.append(candidate)
-                    break
-        return matched_nodes
-
-    def _get_all_text(self, node):
-        text = node.get("title", "") + " " + node.get("summary", "") + " "
-        if "content" in node:
-            if isinstance(node["content"], list):
-                text += " ".join(node["content"])
-            else:
-                text += node["content"]
-        if "children" in node:
-            for child in node["children"]:
-                text += " " + self._get_all_text(child)
-        return text
-
-    def _select_fallback_nodes(self, query, children, max_nodes=3):
-        stop_words = {"a", "an", "the", "and", "or", "but", "is", "are", "was", "were", "in", "on", "at", "to", "for", "with", "about", "of", "what", "where", "when", "why", "how", "does", "did", "do", "it", "this", "that", "these", "those", "from", "by", "as", "be", "has", "have", "had", "will", "would", "can", "could"}
-        query_words = set(self._normalize_title(query).split()) - stop_words
-        
-        def score(child):
-            child_text = self._normalize_title(self._get_all_text(child))
-            child_words = child_text.split()
-            return sum(child_words.count(w) for w in query_words)
-
-        ranked = sorted(children, key=score, reverse=True)
-        return [c for c in ranked[:max_nodes] if c]
-
     @retry(
         retry=retry_if_exception_type(groq.RateLimitError),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -93,40 +48,29 @@ class NavigationAgent:
                     return "Error: The document context is too large for the AI to process. Please try a more specific query."
             raise e
 
-    def choose_paths(self, query, children):
-        options_text = ""
-        for child in children:
-            title = child.get("title", "Unknown Section")
-            summary = child.get("summary", "No summary available.")
-            options_text += f"- Title: '{title}' | Summary: {summary}\n"
+    def _compress_tree(self, nodes):
+        """Compress tree to save tokens — only send node_id, title, and summary."""
+        compressed = []
+        for node in nodes:
+            entry = {
+                "node_id": node.get("node_id"),
+                "title": node.get("title"),
+                "summary": node.get("summary")
+            }
+            if "children" in node and node["children"]:
+                entry["children"] = self._compress_tree(node["children"])
+            compressed.append(entry)
+        return compressed
 
-        prompt = f"""
-        You are an autonomous agent navigating a structured document to answer a user's query.
-        User Query: "{query}"
-
-        Available sub-sections:
-        {options_text}
-
-        Which of these sections might contain information relevant to the query?
-        Reply ONLY as JSON with this exact shape:
-        {{"titles": ["Exact Title 1", "Exact Title 2"]}}
-        If none are relevant, reply {{"titles": []}}.
-        """
-        
-        response = self.ask_llm(prompt)
-        try:
-            cleaned_response = response.strip()
-            if cleaned_response.startswith("```"):
-                cleaned_response = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned_response).strip()
-                
-            data = json.loads(cleaned_response)
-            titles = data.get("titles", [])
-            if isinstance(titles, list):
-                return [t for t in titles if isinstance(t, str) and t.strip()]
-        except json.JSONDecodeError:
-            pass
-
-        return []
+    def _find_nodes_by_ids(self, nodes, target_ids):
+        """Recursively walk the tree and collect nodes matching target_ids."""
+        found = []
+        for node in nodes:
+            if node.get("node_id") in target_ids:
+                found.append(node)
+            if "children" in node and node["children"]:
+                found.extend(self._find_nodes_by_ids(node["children"], target_ids))
+        return found
 
     def synthesize_final_answer(self, query):
         if not self.gathered_context:
@@ -147,52 +91,69 @@ class NavigationAgent:
         """
         return self.ask_llm(prompt)
 
-    def navigate(self, query, current_node=None, is_root=True):
-        if is_root:
-            self.trace.clear()
-            self.gathered_context.clear()
-            print(f"\nAgent started multi-node navigation for: '{query}'")
-
-        if current_node is None:
-            current_node = self.tree
-
-        title = current_node.get("title", "Root")
-        self.trace.append(title)
+    def navigate(self, query):
+        self.trace.clear()
+        self.gathered_context.clear()
         
-        if "content" in current_node and (not current_node.get("children")):
-            print(f"Extracting context from leaf: '{title}'")
-            raw_text = " ".join(current_node["content"]) if isinstance(current_node["content"], list) else current_node.get("content", "")
+        print(f"\nAgent started one-shot compressed tree search for: '{query}'")
+        
+        compressed_tree = self._compress_tree([self.tree])
+        tree_json = json.dumps(compressed_tree, indent=2)
+        
+        prompt = f"""
+        You are an intelligent document retrieval agent.
+        You have been given a structured document tree (in JSON format) containing the titles and summaries of all sections.
+        Your goal is to find the exact sections that contain the information needed to answer the user's query.
+        
+        Document Tree:
+        {tree_json}
+        
+        User Query: "{query}"
+        
+        Reason about which sections are most relevant. Then, provide the `node_id`s for those sections.
+        You MUST return ONLY a valid JSON object with the following structure, and nothing else:
+        {{
+            "reasoning": "Brief explanation of why you selected these nodes...",
+            "node_list": ["root_0_1", "root_1_2"]
+        }}
+        """
+        
+        print("Sending compressed tree to LLM...")
+        response = self.ask_llm(prompt)
+        
+        try:
+            cleaned_response = response.strip()
+            if cleaned_response.startswith("```"):
+                cleaned_response = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned_response).strip()
+                
+            data = json.loads(cleaned_response)
+            target_ids = data.get("node_list", [])
+            reasoning = data.get("reasoning", "No reasoning provided.")
             
+            self.trace.append(f"Reasoning: {reasoning}")
+            
+            if not target_ids:
+                print("LLM found no relevant nodes.")
+                return self.synthesize_final_answer(query)
+                
+            print(f"LLM selected nodes: {target_ids}")
+            
+        except json.JSONDecodeError:
+            print("Failed to parse LLM JSON response. Defaulting to empty selection.")
+            self.trace.append("Failed to parse LLM search reasoning.")
+            return self.synthesize_final_answer(query)
+            
+        matched_nodes = self._find_nodes_by_ids([self.tree], target_ids)
+        
+        for node in matched_nodes:
+            title = node.get("title", "Unknown Section")
+            self.trace.append(f"Retrieved Section: {title}")
+            
+            raw_text = " ".join(node.get("content", [])) if isinstance(node.get("content"), list) else node.get("content", "")
             self.gathered_context.append({
                 "source": title,
                 "content": raw_text
             })
-            if is_root:
-                print("\nNavigation complete. Synthesizing cited answer...")
-                return self.synthesize_final_answer(query)
-            return
-
-        if "children" in current_node and current_node["children"]:
-            print(f"Evaluating {len(current_node['children'])} sub-sections under '{title}'...")
             
-            chosen_titles = self.choose_paths(query, current_node["children"])
-            matched_nodes = self._fuzzy_match_titles(chosen_titles, current_node["children"])
-            
-            if not matched_nodes:
-                print(f"Agent determined no relevant paths under '{title}'.")
-                fallback_nodes = self._select_fallback_nodes(query, current_node["children"])
-                if fallback_nodes:
-                    matched_nodes = fallback_nodes
-                else:
-                    if is_root:
-                        return self.synthesize_final_answer(query)
-                    return
-                 
-            print(f"Agent decided to explore paths: {[n.get('title', 'Unknown') for n in matched_nodes]}")
-            
-            for next_node in matched_nodes:
-                self.navigate(query, next_node, is_root=False)
-
-        if is_root:
-            print("\nNavigation complete. Synthesizing cited answer...")
-            return self.synthesize_final_answer(query)
+        print("\nNavigation complete. Synthesizing cited answer...")
+        return self.synthesize_final_answer(query)
