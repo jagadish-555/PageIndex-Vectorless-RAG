@@ -26,11 +26,11 @@ def extract_pdf_structured(pdf_path):
                         "page": page_num
                     })
 
-    # 🔥 Step 1: Learn font hierarchy
+                                    
     sizes = sorted({s["size"] for s in all_spans}, reverse=True)
     size_rank = {size: i for i, size in enumerate(sizes)}
 
-    # Dynamic threshold based on number of distinct font sizes
+                                                              
     num_sizes = len(sizes)
     if num_sizes == 1:
         header_threshold = 0
@@ -39,7 +39,7 @@ def extract_pdf_structured(pdf_path):
     else:
         header_threshold = 2
 
-    # 🔥 Step 2: Assign roles
+                            
     structured_data = []
     for s in all_spans:
         rank = size_rank[s["size"]]

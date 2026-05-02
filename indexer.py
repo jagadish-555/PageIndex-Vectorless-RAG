@@ -25,16 +25,24 @@ def call_llm_with_retry(prompt, model="llama-3.3-70b-versatile"):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        if isinstance(e, groq.RateLimitError):
-            raise e  # Let the @retry decorator handle rate limits
-            
         error_msg = str(e).lower()
+        if isinstance(e, groq.RateLimitError):
+            if "per day" in error_msg or "tpd" in error_msg:
+                print("Daily rate limit hit! Bypassing retry and falling back immediately.")
+            else:
+                raise e                                                              
+            
         if "token" in error_msg or "context" in error_msg or "limit" in error_msg or "413" in error_msg:
-            print(f"Token limit error encountered. Falling back to openai/gpt-oss-20b...")
-            truncated_prompt = prompt[:15000] + "\n...[Content truncated due to token limits]" if len(prompt) > 15000 else prompt
+            print(f"Token/Rate limit error encountered. Falling back to llama-3.1-8b-instant...")
+            
+            if len(prompt) > 15000:
+                truncated_prompt = prompt[:10000] + "\n\n...[Content truncated due to token limits]...\n\n" + prompt[-4500:]
+            else:
+                truncated_prompt = prompt
+                
             try:
                 fallback_response = client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
+                    model="llama-3.1-8b-instant",
                     messages=[{"role": "user", "content": truncated_prompt}],
                     temperature=0.1
                 )

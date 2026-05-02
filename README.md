@@ -1,12 +1,12 @@
-# PageIndex: Vectorless RAG
+# Vectorless-RAG
 
-A vectorless Retrieval-Augmented Generation (RAG) platform using autonomous LLM agents to perform multi-node tree-search reasoning.
+A vectorless Retrieval-Augmented Generation (RAG) platform using autonomous LLM agents to perform one-shot compressed tree search reasoning.
 
 ## Problem Statement and Solution Overview
 
 **Problem:** Traditional RAG systems rely heavily on vector databases (like Pinecone or FAISS) to calculate cosine similarity between document chunks and user queries. This approach often fails to understand the structural context of the document (e.g., matching a keyword in a sub-bullet point without knowing its parent heading) and can result in fragmented or incorrect context retrieval.
 
-**Solution:** This project completely abandons vector embeddings. Instead, it extracts the hierarchical structure of a document (e.g., Chapters -> Sections -> Body) using a custom PDF parser. An autonomous LLM agent then evaluates this "Document Tree," deciding dynamically which paths to explore based on the user's query, synthesizing a highly accurate, structurally-aware final answer.
+**Solution:** This project completely abandons vector embeddings. Instead, it extracts the hierarchical structure of a document (e.g., Chapters -> Sections -> Body) using a custom PDF parser. An autonomous LLM agent then evaluates a compressed version of this "Document Tree" in a single prompt, instantly identifying the exact structural nodes that contain the answer. This ensures highly accurate, structurally-aware context retrieval with minimal API calls.
 
 ## Tech Stack and Decisions
 
@@ -18,10 +18,11 @@ A vectorless Retrieval-Augmented Generation (RAG) platform using autonomous LLM 
 
 ## Features
 
-- [x] Vectorless Agentic Navigation (Tree-Search Routing)
+- [x] One-Shot Compressed Tree Search Routing
 - [x] Custom PDF Parsing with Dynamic Font-Size Hierarchy Detection
 - [x] Zero-latency Regex Heuristics for Cost/Speed Optimization
 - [x] Exponential Backoff for Rate Limiting Resilience
+- [x] O(1) API Calls per Query (Massive Speed & Cost Efficiency)
 - [x] Real-time Interactive Traversal UI (Streamlit)
 - [x] LLM Response Cleaning for JSON Parsing Resilience
 - [ ] Multi-Document Knowledge Base Support
