@@ -29,14 +29,19 @@ def call_llm_with_retry(prompt, model="llama-3.3-70b-versatile"):
             raise e  # Let the @retry decorator handle rate limits
             
         error_msg = str(e).lower()
-        if "token" in error_msg or "context" in error_msg or "limit" in error_msg:
+        if "token" in error_msg or "context" in error_msg or "limit" in error_msg or "413" in error_msg:
             print(f"Token limit error encountered. Falling back to openai/gpt-oss-20b...")
-            fallback_response = client.chat.completions.create(
-                model="openai/gpt-oss-20b",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
-            )
-            return fallback_response.choices[0].message.content.strip()
+            truncated_prompt = prompt[:15000] + "\n...[Content truncated due to token limits]" if len(prompt) > 15000 else prompt
+            try:
+                fallback_response = client.chat.completions.create(
+                    model="openai/gpt-oss-20b",
+                    messages=[{"role": "user", "content": truncated_prompt}],
+                    temperature=0.1
+                )
+                return fallback_response.choices[0].message.content.strip()
+            except Exception as inner_e:
+                print(f"Fallback model failed: {inner_e}")
+                return "Error: The text is too large to summarize."
         raise e
 
 def generate_summary(text, level_type):
@@ -82,9 +87,18 @@ def build_tree(structured_data):
             if current_chapter is None:
                 current_chapter = {"title": "Default Chapter", "children": []}
                 chapters.append(current_chapter)
+            
             if current_section is None:
                 current_section = {"title": "Default Section", "content": []}
                 current_chapter["children"].append(current_section)
+            else:
+                current_length = sum(len(c) for c in current_section["content"])
+                if current_length > 3000:
+                    base_title = current_section["title"]
+                    if not base_title.endswith(" (Continued)"):
+                        base_title += " (Continued)"
+                    current_section = {"title": base_title, "content": []}
+                    current_chapter["children"].append(current_section)
                 
             current_section["content"].append(item["content"])
 
